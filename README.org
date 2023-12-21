@@ -1,0 +1,19 @@
+#+TITLE: Klipsch ProMedia Heritage 2.0 notes
+Got a pair of Klipsch ProMedia Heritage 2.0 speakers in my home office. I bought them because they supported USB connectivity supposedly. I hadn't done my research properly so I was surprised to see the USB _host_ port when I received the speakers. I wanted to connect the speakers to my computer using a USB cable and use the onboard DAC so I was a little disappointed to learn that.
+
+However the speakers support "OTA" updating over USB (technically is not "over the air" is it?). You get a `.bin` from Klipsch, put it on a USB pen drive and then power cycle the speakers. Tested it, and it works fine!
+
+* Research
+From looking at the `ota.bin` in a hex editor we know:
+- that the speakers are using the Actions ATS2853 chip
+- that the chip is running the Zephyr RTOS
+- that the `.bin` is probably itself partitioned according to an XML document in the beginning of the file
+
+Found the data sheet in a [[https://drive.google.com/drive/folders/1aj_lxNtW_B-i_4P-NdelU0J6__6VcM-2][shared Google Drive folder]] that I found in the description of a [[https://www.youtube.com/watch?v=-qXtPv1l-v4][Youtube video]].
+
+Digging a bit on Github I [[https://github.com/lexia-wisdom/doc/wiki/ATS2853%E7%A1%AC%E4%BB%B6%E5%BC%80%E5%8F%91%E8%B5%84%E6%96%99][found some more documentation]], including a link (and password) to Baidu supposedly containing SDKs, data sheets, etc. Got a copy of that for $1 using baidudownloader.com.
+
+
+* Looking for files
+- [[https://download.csdn.net/download/weixin_43630551/33648504][`ATS2853.sch`]]
+- 
