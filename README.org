@@ -1,19 +1,103 @@
 #+TITLE: Klipsch ProMedia Heritage 2.0 notes
 Got a pair of Klipsch ProMedia Heritage 2.0 speakers in my home office. I bought them because they supported USB connectivity supposedly. I hadn't done my research properly so I was surprised to see the USB _host_ port when I received the speakers. I wanted to connect the speakers to my computer using a USB cable and use the onboard DAC so I was a little disappointed to learn that.
 
-However the speakers support "OTA" updating over USB (technically is not "over the air" is it?). You get a `.bin` from Klipsch, put it on a USB pen drive and then power cycle the speakers. Tested it, and it works fine!
+However the speakers support "OTA" updating over USB (technically is not "over the air" is it?). You get a ~.bin~ from Klipsch, put it on a USB pen drive and then power cycle the speakers. Tested it, and it works fine!
 
 * Research
-From looking at the `ota.bin` in a hex editor we know:
+** Looking at Klipsch OTA files
+From looking at the ~ota.bin~ in a hex editor we know:
 - that the speakers are using the Actions ATS2853 chip
 - that the chip is running the Zephyr RTOS
-- that the `.bin` is probably itself partitioned according to an XML document in the beginning of the file
-
+- that the ~.bin~ is probably itself partitioned according to an XML document in the beginning of the file
+  
+** Sleuthing around on the interwebs
 Found the data sheet in a [[https://drive.google.com/drive/folders/1aj_lxNtW_B-i_4P-NdelU0J6__6VcM-2][shared Google Drive folder]] that I found in the description of a [[https://www.youtube.com/watch?v=-qXtPv1l-v4][Youtube video]].
 
 Digging a bit on Github I [[https://github.com/lexia-wisdom/doc/wiki/ATS2853%E7%A1%AC%E4%BB%B6%E5%BC%80%E5%8F%91%E8%B5%84%E6%96%99][found some more documentation]], including a link (and password) to Baidu supposedly containing SDKs, data sheets, etc. Got a copy of that for $1 using baidudownloader.com.
 
+There's an [[https://community.klipsch.com/index.php?/topic/168919-pro-media-21-bluetooth-issue/][interesting thread]] with PCB closeups on the Klipsch community forums.
+
+** Looking at the OTA files some more...
+Eyeballing the ~ota.bin~ in a hex editor there's a pretty apparent XML structure near the start. I've reformatted it into a table. It declares the following partitions:
+|             |              |         |              |       <r> |              |
+| type        | name         | file_id | file_name    | file_size | checksum     |
+|-------------+--------------+---------+--------------+-----------+--------------|
+| ~BOOT~      | ~fw0_boot~   | ~1~     | ~mbrec.bin~  |  ~0x1000~ | ~0x0cf42aae~ |
+| ~SYS_PARAM~ | ~sys_param0~ | ~2~     | ~param.bin~  |   ~0x200~ | ~0x8240d9e5~ |
+| ~SYSTEM~    | ~fw0_sys~    | ~4~     | ~zephyr.bin~ | ~0xca220~ | ~0x261cbf03~ |
+| ~DATA~      | ~fw0_sdfs~   | ~5~     | ~sdfs.bin~   |  ~0xa440~ | ~0x75fb2508~ |
+
+I wonder what happened to ~file_id~ ~3~?!
+
+The partition file sizes sum to ~0xD5860~ bytes. The file size of ~ota.bin~ is ~0xD6600~, so subtracting those yields ~0xDA0~ bytes of the file not part of partitions. The header (the stuff containing the partition table etc) is 0xa00 bytes long if my assumption about the offset is correct, so that leaves us with ~0x3A0~ bytes unaccounted for.
+
+Maybe we should look for stretches of 00 bytes to find the last kilobyte or so? Chunking the file in pieces by looking at stretches of ~0x00~, giving me this table (descriptions contain **spoilers** and were written after the fact)
+
+|       <r> |       <r> |                                                                                         |
+|    offset |    length | description                                                                             |
+|-----------+-----------+-----------------------------------------------------------------------------------------|
+|     ~0x0~ |   ~0x400~ | Start of the file. Magic bytes: 41 4F 54 41 B8 B0 5A C2 (first four are printable AOTA) |
+|   ~0x400~ |   ~0x600~ | XML structure containing the partition table                                            |
+|   ~0xa00~ | ~0xca400~ | Very likely ~zephyr.bin~ (0xca220 + 0x1e0 bytes of padding)                             |
+| ~0xcae00~ |  ~0xa600~ | Very likely ~sdfs.bin~ (0xa440 + 0x1c0 bytes of padding)                                |
+| ~0xd5400~ |  ~0x1200~ | That looks like the file sizes of ~mbrec.bin~ + ~param.bin~                             |
+
+If we sum the lengths of the padding we get exactly ~0x3a0~ which was the amount of bytes we were looking for! Since the partitions are written to the file in a non-ordinal order (~4, 5, 1, 2~ or ~4, 5, 2, 1~) the first ~0x400~ bytes of the file would probably contain some pointers that relate file IDs to an offset or whatever...
+
+Yeah, there's totally an array of structs at ~0x200~! Into the rabbit hole we go...
+
+*** The struct array
+Copying some output from ~xxd~. I removed 11 lines of all zeroes and reformatted it to fit in a table.
+
+| filename                                  | offset (LE) | length (LE) | empty       | checksum (LE) | ascii                              |
+|-------------------------------------------+-------------+-------------+-------------+---------------+------------------------------------|
+| ~6f74 612e 786d 6c00 0000 0000 0000 0000~ | ~0004 0000~ | ~3f04 0000~ | ~0000 0000~ | ~b092 606d~   | ~ota.xml.............?.........`m~ |
+| ~7a65 7068 7972 2e62 696e 0000 0000 0000~ | ~000a 0000~ | ~20a2 0c00~ | ~0000 0000~ | ~03bf 1c26~   | ~zephyr.bin.......... ..........&~ |
+| ~7364 6673 2e62 696e 0000 0000 0000 0000~ | ~00ae 0c00~ | ~40a4 0000~ | ~0000 0000~ | ~0825 fb75~   | ~sdfs.bin............@........%.u~ |
+| ~6d62 7265 632e 6269 6e00 0000 0000 0000~ | ~0054 0d00~ | ~0010 0000~ | ~0000 0000~ | ~ae2a f40c~   | ~mbrec.bin........T...........*..~ |
+| ~7061 7261 6d2e 6269 6e00 0000 0000 0000~ | ~0064 0d00~ | ~0002 0000~ | ~0000 0000~ | ~e5d9 4082~   | ~param.bin........d............@.~ |
+
+Each element in the table takes ~0x20~ bytes and contains:
+- ~char[16]~ filename
+- ~uint32_t~ addr
+- ~uint32_t~ length
+- ~uint32_t~ empty
+- ~char[4]~ checksum
+
+We may call such a structure a **partition descriptor**. All numeric values are little-endian.
+
+Anyway, using this information we can totally ratify the table from before:
+|       <r> |       <r> |                                                                                 |              |
+|    offset |    length | description                                                                     | checksum     |
+|-----------+-----------+---------------------------------------------------------------------------------+--------------|
+|     ~0x0~ |   ~0x200~ | Header Magic bytes: ~41 4F 54 41 B8 B0 5A C2~ (first four are printable ~AOTA~) | n/a          |
+|   ~0x200~ |   ~0x200~ | Exactly 16 partition descriptors                                                | n/a          |
+|   ~0x400~ |   ~0x43f~ | ~ota.xml~                                                                       | ~0x6d6092b0~ |
+|   ~0xa00~ | ~0xca220~ | ~zephyr.bin~                                                                    | ~0x261cbf03~ |
+| ~0xcae00~ |  ~0xa440~ | ~sdfs.bin~                                                                      | ~0x75fb2508~ |
+| ~0xd5400~ |  ~0x1000~ | ~mbrec.bin~                                                                     | ~0x0cf42aae~ |
+| ~0xd6400~ |   ~0x200~ | ~param.bin~                                                                     | ~0x8240d9e5~ |
+
+Welp, looks like we have what we need to extract the files out of ~ota.bin~.
+
+*** Figuring out the checksum algorithm
+Googling around for strings in the XML structure (~mbrec.bin~ specifically) yielded [[https://github.com/nfd/atj2127decrypt/blob/master/dfu/actions_adfu_upgrade.py][this]] Github project which seems to be able to disassemble the OTA blobs for another chip (ATJ2127?) but also containing a checksum routine which may or may not work for this.
+
+** Futher analysis
+*** Hardware architecture
+It's MIPS!
+
+* Mandarin
+| English term          | Mandarin |
+| Actions semiconductor | 炬力      |
+|                       |          |
+
 
 * Looking for files
-- [[https://download.csdn.net/download/weixin_43630551/33648504][`ATS2853.sch`]]
-- 
+- [[https://download.csdn.net/download/weixin_43630551/33648504][~ATS2853.sch~]]
+- https://download.csdn.net/download/weixin_43220440/10670764 (looks like a rather complete SDK, but it targets a sibling chip ATS2823/ATS2825)
+
+** Nuked ones
+Keeping a list of bad stuff that I might stumble across again.
+
+- Supposedly the SDK, but isn't: https://download.csdn.net/download/blueyond/2096220
