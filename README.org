@@ -29,18 +29,18 @@ Eyeballing the ~ota.bin~ in a hex editor there's a pretty apparent XML structure
 
 I wonder what happened to ~file_id~ ~3~?!
 
-The partition file sizes sum to ~0xD5860~ bytes. The file size of ~ota.bin~ is ~0xD6600~, so subtracting those yields ~0xDA0~ bytes of the file not part of partitions. The header (the stuff containing the partition table etc) is 0xa00 bytes long if my assumption about the offset is correct, so that leaves us with ~0x3A0~ bytes unaccounted for.
+The partition file sizes sum to ~0xD5860~ bytes. The file size of ~ota.bin~ is ~0xD6600~, so subtracting those yields ~0xDA0~ bytes of the file not part of partitions. The header (the stuff containing the partition table etc) is ~0xa00~ bytes long if my assumption about the offset is correct, so that leaves us with ~0x3A0~ bytes unaccounted for.
 
-Maybe we should look for stretches of 00 bytes to find the last kilobyte or so? Chunking the file in pieces by looking at stretches of ~0x00~, giving me this table (descriptions contain **spoilers** and were written after the fact)
+Maybe we should look for stretches of ~0x00~ bytes to find the last kilobyte or so? Chunking the file in pieces by looking at stretches of ~0x00~, giving me this table (descriptions contain **spoilers** and were written after the fact)
 
-|       <r> |       <r> |                                                                                         |
-|    offset |    length | description                                                                             |
-|-----------+-----------+-----------------------------------------------------------------------------------------|
-|     ~0x0~ |   ~0x400~ | Start of the file. Magic bytes: 41 4F 54 41 B8 B0 5A C2 (first four are printable AOTA) |
-|   ~0x400~ |   ~0x600~ | XML structure containing the partition table                                            |
-|   ~0xa00~ | ~0xca400~ | Very likely ~zephyr.bin~ (0xca220 + 0x1e0 bytes of padding)                             |
-| ~0xcae00~ |  ~0xa600~ | Very likely ~sdfs.bin~ (0xa440 + 0x1c0 bytes of padding)                                |
-| ~0xd5400~ |  ~0x1200~ | That looks like the file sizes of ~mbrec.bin~ + ~param.bin~                             |
+|       <r> |       <r> |                                                                                   |
+|    offset |    length | description                                                                       |
+|-----------+-----------+-----------------------------------------------------------------------------------|
+|     ~0x0~ |   ~0x400~ | Header. Magic bytes: ~41 4F 54 41 B8 B0 5A C2~ (first four are printable: ~AOTA~) |
+|   ~0x400~ |   ~0x600~ | XML structure containing the partition table                                      |
+|   ~0xa00~ | ~0xca400~ | Very likely ~zephyr.bin~ (~0xca220~ + ~0x1e0~ bytes of padding)                   |
+| ~0xcae00~ |  ~0xa600~ | Very likely ~sdfs.bin~ (~0xa440~ + ~0x1c0~ bytes of padding)                      |
+| ~0xd5400~ |  ~0x1200~ | That looks like the file sizes of ~mbrec.bin~ + ~param.bin~                       |
 
 If we sum the lengths of the padding we get exactly ~0x3a0~ which was the amount of bytes we were looking for! Since the partitions are written to the file in a non-ordinal order (~4, 5, 1, 2~ or ~4, 5, 2, 1~) the first ~0x400~ bytes of the file would probably contain some pointers that relate file IDs to an offset or whatever...
 
@@ -59,7 +59,7 @@ Copying some output from ~xxd~. I removed 11 lines of all zeroes and reformatted
 
 Each element in the table takes ~0x20~ bytes and contains:
 - ~char[16]~ filename
-- ~uint32_t~ addr
+- ~uint32_t~ offset
 - ~uint32_t~ length
 - ~uint32_t~ empty
 - ~char[4]~ checksum
@@ -67,16 +67,16 @@ Each element in the table takes ~0x20~ bytes and contains:
 We may call such a structure a **partition descriptor**. All numeric values are little-endian.
 
 Anyway, using this information we can totally ratify the table from before:
-|       <r> |       <r> |                                                                                 |              |
-|    offset |    length | description                                                                     | checksum     |
-|-----------+-----------+---------------------------------------------------------------------------------+--------------|
-|     ~0x0~ |   ~0x200~ | Header Magic bytes: ~41 4F 54 41 B8 B0 5A C2~ (first four are printable ~AOTA~) | n/a          |
-|   ~0x200~ |   ~0x200~ | Exactly 16 partition descriptors                                                | n/a          |
-|   ~0x400~ |   ~0x43f~ | ~ota.xml~                                                                       | ~0x6d6092b0~ |
-|   ~0xa00~ | ~0xca220~ | ~zephyr.bin~                                                                    | ~0x261cbf03~ |
-| ~0xcae00~ |  ~0xa440~ | ~sdfs.bin~                                                                      | ~0x75fb2508~ |
-| ~0xd5400~ |  ~0x1000~ | ~mbrec.bin~                                                                     | ~0x0cf42aae~ |
-| ~0xd6400~ |   ~0x200~ | ~param.bin~                                                                     | ~0x8240d9e5~ |
+|       <r> |       <r> |                                                                                   |              |
+|    offset |    length | description                                                                       | checksum     |
+|-----------+-----------+-----------------------------------------------------------------------------------+--------------|
+|     ~0x0~ |   ~0x200~ | Header. Magic bytes: ~41 4F 54 41 B8 B0 5A C2~ (first four are printable: ~AOTA~) | n/a          |
+|   ~0x200~ |   ~0x200~ | Exactly 16 partition descriptors                                                  | n/a          |
+|   ~0x400~ |   ~0x43f~ | ~ota.xml~                                                                         | ~0x6d6092b0~ |
+|   ~0xa00~ | ~0xca220~ | ~zephyr.bin~                                                                      | ~0x261cbf03~ |
+| ~0xcae00~ |  ~0xa440~ | ~sdfs.bin~                                                                        | ~0x75fb2508~ |
+| ~0xd5400~ |  ~0x1000~ | ~mbrec.bin~                                                                       | ~0x0cf42aae~ |
+| ~0xd6400~ |   ~0x200~ | ~param.bin~                                                                       | ~0x8240d9e5~ |
 
 Welp, looks like we have what we need to extract the files out of ~ota.bin~.
 
